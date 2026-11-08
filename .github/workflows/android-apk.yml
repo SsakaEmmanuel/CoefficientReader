@@ -23,6 +23,24 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Prepare persistent signing key (when repository secrets are configured)
+        if: ${{ secrets.CR_KEYSTORE_BASE64 != '' }}
+        env:
+          CR_KEYSTORE_BASE64: ${{ secrets.CR_KEYSTORE_BASE64 }}
+          CR_KEYSTORE_PASSWORD: ${{ secrets.CR_KEYSTORE_PASSWORD }}
+          CR_KEY_ALIAS: ${{ secrets.CR_KEY_ALIAS }}
+          CR_KEY_PASSWORD: ${{ secrets.CR_KEY_PASSWORD }}
+        run: |
+          KEYSTORE_PATH="$RUNNER_TEMP/coefficientreader-release.jks"
+          printf '%s' "$CR_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          {
+            echo "CR_SIGNING_ENABLED=true"
+            echo "CR_KEYSTORE_PATH=$KEYSTORE_PATH"
+            echo "CR_KEYSTORE_PASSWORD=$CR_KEYSTORE_PASSWORD"
+            echo "CR_KEY_ALIAS=$CR_KEY_ALIAS"
+            echo "CR_KEY_PASSWORD=$CR_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
       - name: Accept Android SDK licences
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
