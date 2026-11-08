@@ -256,9 +256,9 @@ class MainActivity : ComponentActivity() {
                                                             when (event) {
                                                                 is FeedEvent.Status -> {
                                                                     status = event.message
-                                                                    connected = !event.message.contains("failed", true) &&
-                                                                        !event.message.contains("HTTP 4", true) &&
-                                                                        !event.message.contains("HTTP 5", true)
+                                                                    connected = event.message.contains("connected", true) &&
+                                                                        !event.message.contains("reconnecting", true) &&
+                                                                        !event.message.contains("failed", true)
                                                                 }
                                                                 is FeedEvent.Data -> {
                                                                     if (event.hits.isNotEmpty()) {
