@@ -8,50 +8,32 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.delay
 import java.net.URI
 import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.roundToInt
-
-data class Odds(val decimal: Double, val fractional: String, val american: String, val probability: String)
-
-object OddsConverter {
-    fun convert(value: Double): Odds? {
-        if (!value.isFinite() || value <= 1.0 || value > 10000.0) return null
-        val profit = value - 1.0
-        val (n, d) = fraction(profit)
-        val american = if (value >= 2.0) "+${(profit * 100).roundToInt()}" else "-${(100.0 / profit).roundToInt()}"
-        return Odds(value, "$n/$d", american, String.format(Locale.US, "%.2f%%", 100.0 / value))
-    }
-    private fun fraction(value: Double): Pair<Int, Int> {
-        var bestN = 1; var bestD = 1; var bestError = Double.MAX_VALUE
-        for (denominator in 1..1000) {
-            val numerator = (value * denominator).roundToInt()
-            val error = abs(value - numerator.toDouble() / denominator)
-            if (error < bestError) { bestError = error; bestN = numerator; bestD = denominator }
-            if (error < 0.000001) break
-        }
-        val divisor = gcd(bestN, bestD)
-        return bestN / divisor to bestD / divisor
-    }
-    private fun gcd(a: Int, b: Int): Int = if (b == 0) a.coerceAtLeast(1) else gcd(b, a % b)
-}
 
 class MainActivity : ComponentActivity() {
-    private var textCallback: ((String) -> Unit)? = null
+    private var pageTextCallback: ((String) -> Unit)? = null
+
     inner class PageBridge {
-        @JavascriptInterface fun sendVisibleText(value: String) {
-            runOnUiThread { textCallback?.invoke(value.take(12000)) }
+        @JavascriptInterface
+        fun sendVisibleText(value: String) {
+            runOnUiThread { pageTextCallback?.invoke(value.take(20000)) }
         }
     }
 
@@ -59,67 +41,159 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                var address by remember { mutableStateOf("") }
-                var manual by remember { mutableStateOf("") }
-                var status by remember { mutableStateOf("Enter a website URL.") }
+            val bg = Color(0xFF101018)
+            val panel = Color(0xFF1C1C28)
+            val red = Color(0xFFFF3038)
+            MaterialTheme(colorScheme = darkColorScheme(
+                primary = red,
+                background = bg,
+                surface = panel,
+                onBackground = Color.White,
+                onSurface = Color.White
+            )) {
+                var urlInput by remember { mutableStateOf("") }
+                var activeUrl by remember { mutableStateOf("") }
+                var screen by remember { mutableStateOf("setup") }
+                var status by remember { mutableStateOf("Enter the bookmaker website address to begin.") }
+                var latestCoefficient by remember { mutableStateOf("--") }
+                var lastUpdated by remember { mutableStateOf("Waiting for website data") }
                 var webView by remember { mutableStateOf<WebView?>(null) }
-                var candidates by remember { mutableStateOf<List<Odds>>(emptyList()) }
-                var result by remember { mutableStateOf<Odds?>(null) }
+                var scanActive by remember { mutableStateOf(false) }
 
-                textCallback = { pageText ->
-                    val regex = Regex("""(?<![\d.])(?:[1-9]\d{0,3})\.\d{1,4}(?![\d.])""")
-                    candidates = regex.findAll(pageText)
-                        .mapNotNull { it.value.toDoubleOrNull()?.let(OddsConverter::convert) }
-                        .distinctBy { it.decimal }.take(12).toList()
+                pageTextCallback = { visibleText ->
+                    val oddsPattern = Regex("""(?<![\\d.])(?:[1-9]\\d{0,3})\\.\\d{1,4}(?![\\d.])""")
+                    val values = oddsPattern.findAll(visibleText)
+                        .mapNotNull { it.value.toDoubleOrNull() }
+                        .filter { it > 1.0 && it <= 10000.0 }
+                        .toList()
+                    if (values.isNotEmpty()) {
+                        latestCoefficient = String.format(Locale.US, "%.2f", values.first())
+                        lastUpdated = "Page data received · live scan"
+                    }
                 }
+
                 DisposableEffect(Unit) {
-                    onDispose { textCallback = null; webView?.destroy() }
+                    onDispose { pageTextCallback = null; webView?.destroy() }
                 }
 
-                Scaffold { padding ->
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        item {
-                            Text("CoefficientReader", style = MaterialTheme.typography.headlineMedium)
-                            Text("Browser-based coefficient reader and converter.")
+                LaunchedEffect(scanActive, webView) {
+                    while (scanActive) {
+                        webView?.evaluateJavascript(
+                            "(function(){return document.body ? document.body.innerText : '';})()"
+                        ) { encoded ->
+                            val decoded = runCatching {
+                                org.json.JSONTokener(encoded ?: "\"\"").nextValue() as? String
+                            }.getOrNull()
+                            if (!decoded.isNullOrBlank()) pageTextCallback?.invoke(decoded)
                         }
-                        item {
-                            OutlinedTextField(address, { address = it }, Modifier.fillMaxWidth(), label = { Text("Website URL") }, singleLine = true)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = {
-                                    val raw = address.trim()
+                        delay(3000)
+                    }
+                }
+
+                Scaffold(containerColor = bg) { padding ->
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                            Column {
+                                Text("COEFFICIENT", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp)
+                                Text("READER", color = red, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
+                            }
+                            Surface(color = Color(0xFF203A2C), shape = RoundedCornerShape(50)) {
+                                Text(if (scanActive) "● LIVE" else "● OFFLINE", color = if (scanActive) Color(0xFF62E69A) else Color.LightGray, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (screen == "setup") {
+                            Text("Connect your website", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                            Text("Enter the bookmaker URL. Sign in on the bookmaker's own page inside the app; CoefficientReader does not collect or store your password.", color = Color.LightGray)
+                            OutlinedTextField(
+                                value = urlInput,
+                                onValueChange = { urlInput = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Website URL") },
+                                placeholder = { Text("https://example.com") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = red,
+                                    focusedLabelColor = red,
+                                    cursorColor = red
+                                )
+                            )
+                            Button(
+                                onClick = {
+                                    val raw = urlInput.trim()
                                     val full = if (raw.startsWith("https://") || raw.startsWith("http://")) raw else "https://$raw"
                                     val valid = runCatching {
                                         URI(full).let { (it.scheme == "https" || it.scheme == "http") && !it.host.isNullOrBlank() }
                                     }.getOrDefault(false)
-                                    if (valid) { address = full; webView?.loadUrl(full) } else status = "Enter a valid URL."
-                                }) { Text("Open") }
-                                OutlinedButton(onClick = { webView?.reload() }) { Text("Reload") }
+                                    if (valid) {
+                                        activeUrl = full
+                                        status = "Opening bookmaker website…"
+                                        screen = "browser"
+                                        webView?.loadUrl(full)
+                                    } else status = "Please enter a valid website URL."
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = red)
+                            ) { Text("OPEN WEBSITE", fontWeight = FontWeight.Bold) }
+                            Text(status, color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.weight(1f))
+                            Text("Your phone number and password are entered only on the bookmaker's own login page.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            if (screen == "browser") {
+                                Text("Sign in to your bookmaker", color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Complete sign-in on the website below. Then return here and start the reader.", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                                Button(onClick = { screen = "reader"; scanActive = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = red)) {
+                                    Text("I'M SIGNED IN — START READER", fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("LIVE COEFFICIENT", color = Color.LightGray, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                    TextButton(onClick = { scanActive = !scanActive }) { Text(if (scanActive) "Pause" else "Resume", color = red) }
+                                }
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Box(
+                                        modifier = Modifier.size(230.dp).background(Color(0xFF35191D), CircleShape).padding(7.dp).background(red, CircleShape).padding(5.dp).background(bg, CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text(latestCoefficient, color = red, fontSize = 48.sp, fontWeight = FontWeight.Black)
+                                            Text("COEFFICIENT", color = Color.White, fontSize = 11.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                                Text(lastUpdated, color = Color(0xFF9B9BA8), style = MaterialTheme.typography.bodySmall)
+                                Text("Automatic page scan every 3 seconds. Live page changes are also observed.", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                    OutlinedButton(onClick = { webView?.reload() }, modifier = Modifier.weight(1f)) { Text("Refresh site") }
+                                    OutlinedButton(onClick = { screen = "browser"; scanActive = false }, modifier = Modifier.weight(1f)) { Text("Back to site") }
+                                }
                             }
-                            Text(status, style = MaterialTheme.typography.bodySmall)
-                        }
-                        item {
-                            Text("In-app browser", style = MaterialTheme.typography.titleMedium)
+
                             AndroidView(
-                                modifier = Modifier.fillMaxWidth().height(340.dp),
+                                modifier = Modifier.fillMaxWidth().weight(1f).background(panel, RoundedCornerShape(14.dp)),
                                 factory = { context ->
                                     WebView(context).apply {
                                         settings.javaScriptEnabled = true
                                         settings.domStorageEnabled = true
+                                        settings.loadsImagesAutomatically = true
                                         webChromeClient = WebChromeClient()
                                         addJavascriptInterface(PageBridge(), "CoefficientBridge")
                                         webViewClient = object : WebViewClient() {
                                             override fun onPageFinished(view: WebView, url: String) {
-                                                status = "Loaded: $url"
+                                                status = "Website loaded"
                                                 view.evaluateJavascript("""
                                                     (function() {
                                                       if (window.__coefficientReaderObserver) return;
                                                       window.__coefficientReaderObserver = true;
                                                       const send = function() {
-                                                        try { window.CoefficientBridge.sendVisibleText(document.body ? document.body.innerText : ''); } catch(e) {}
+                                                        try {
+                                                          const text = document.body ? document.body.innerText : '';
+                                                          window.CoefficientBridge.sendVisibleText(text);
+                                                        } catch(e) {}
                                                       };
                                                       send();
                                                       new MutationObserver(send).observe(document.documentElement, {subtree:true, childList:true, characterData:true});
@@ -129,38 +203,13 @@ class MainActivity : ComponentActivity() {
                                         }
                                         webView = this
                                     }
-                                }
+                                },
+                                update = { if (activeUrl.isNotBlank() && it.url == null && screen != "setup") it.loadUrl(activeUrl) }
                             )
-                            Text("Only visible page text is scanned. Unrelated numbers may be detected; verify every candidate against its market.", style = MaterialTheme.typography.bodySmall)
                         }
-                        item {
-                            Text("Manual conversion", style = MaterialTheme.typography.titleMedium)
-                            OutlinedTextField(manual, { manual = it }, Modifier.fillMaxWidth(), label = { Text("Decimal odds, e.g. 1.85") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
-                            Button(onClick = { result = manual.trim().replace(',', '.').toDoubleOrNull()?.let(OddsConverter::convert) }) { Text("Convert") }
-                            result?.let { OddsCard(it) }
-                            if (manual.isNotBlank() && result == null) Text("Enter decimal odds greater than 1.00.", color = MaterialTheme.colorScheme.error)
-                        }
-                        item {
-                            Text("Detected candidates", style = MaterialTheme.typography.titleMedium)
-                            Text("Experimental scanner · candidate values only", style = MaterialTheme.typography.bodySmall)
-                        }
-                        if (candidates.isEmpty()) item { Text("No candidates detected yet.") }
-                        else items(candidates) { OddsCard(it) }
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-fun OddsCard(odds: Odds) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(String.format(Locale.US, "Decimal: %.3f", odds.decimal), style = MaterialTheme.typography.titleMedium)
-            Text("Fractional: ${odds.fractional}")
-            Text("American: ${odds.american}")
-            Text("Implied probability: ${odds.probability}")
         }
     }
 }
