@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val persistentSigningEnabled = System.getenv("CR_SIGNING_ENABLED") == "true"
+
 android {
     namespace = "com.coefficientreader.app"
     compileSdk = 35
@@ -12,6 +15,23 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "1.2"
+    }
+    signingConfigs {
+        if (persistentSigningEnabled) {
+            create("persistent") {
+                storeFile = file(System.getenv("CR_KEYSTORE_PATH") ?: error("CR_KEYSTORE_PATH missing"))
+                storePassword = System.getenv("CR_KEYSTORE_PASSWORD") ?: error("CR_KEYSTORE_PASSWORD missing")
+                keyAlias = System.getenv("CR_KEY_ALIAS") ?: error("CR_KEY_ALIAS missing")
+                keyPassword = System.getenv("CR_KEY_PASSWORD") ?: error("CR_KEY_PASSWORD missing")
+            }
+        }
+    }
+    buildTypes {
+        getByName("debug") {
+            if (persistentSigningEnabled) {
+                signingConfig = signingConfigs.getByName("persistent")
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
