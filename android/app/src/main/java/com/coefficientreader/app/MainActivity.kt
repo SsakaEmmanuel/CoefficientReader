@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
                 var scanActive by remember { mutableStateOf(false) }
 
                 pageTextCallback = { visibleText ->
-                    val oddsPattern = Regex("""(?<![\\d.])(?:[1-9]\\d{0,3})\\.\\d{1,4}(?![\\d.])""")
+                    val oddsPattern = Regex("""(?<![\d.])(?:[1-9]\\d{0,3})\\.\\d{1,4}(?![\\d.])""")
                     val values = oddsPattern.findAll(visibleText)
                         .mapNotNull { it.value.toDoubleOrNull() }
                         .filter { it > 1.0 && it <= 10000.0 }
