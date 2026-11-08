@@ -49,7 +49,7 @@ sealed class FeedEvent {
 
 object OddsPayloadParser {
     private val priceKey = Regex(
-        "(?i).*(decimal_?odds|odds_?decimal|odds|coefficient|coef|back_?price|lay_?price|current_?price|price).*"
+        "(?i).*(decimal_?odds|odds_?decimal|odds|coefficient|coef|multiplier|crash_?multiplier|multiplier_?crash|back_?price|lay_?price|current_?price|price).*"
     )
 
     fun parse(payload: String): List<CoefficientHit> {
@@ -58,7 +58,7 @@ object OddsPayloadParser {
         } catch (_: Exception) {
             try { JSONArray(payload) } catch (_: Exception) {
                 val single = payload.trim().toDoubleOrNull()
-                return if (single != null && single > 1.0 && single <= 1000.0) {
+                return if (single != null && single >= 1.0 && single <= 1000.0) {
                     listOf(CoefficientHit(single, "stream value"))
                 } else emptyList()
             }
@@ -83,7 +83,7 @@ object OddsPayloadParser {
                             is String -> value.trim().replace(",", ".").toDoubleOrNull()
                             else -> null
                         }
-                        if (number != null && number > 1.0 && number <= 1000.0) {
+                        if (number != null && number >= 1.0 && number <= 1000.0) {
                             found.add(CoefficientHit(number, nextPath))
                         }
                     }
