@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
                                                 fontSize = 48.sp,
                                                 fontWeight = FontWeight.Black
                                             )
-                                            Text("DECIMAL ODDS", color = Color.White, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+                                            Text("CRASH MULTIPLIER", color = Color.White, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
                                             Text(if (connected) "STREAM ACTIVE" else "WAITING FOR FEED", color = if (connected) mint else Color(0xFF9AA3B5), fontSize = 9.sp)
                                         }
                                     }
@@ -152,6 +152,22 @@ class MainActivity : ComponentActivity() {
                                     Text(
                                         "Connect directly to an API or live feed. This engine does not scrape numbers from a website's visible screen.",
                                         color = Color(0xFFAAB1C1), fontSize = 12.sp
+                                    )
+                                    OutlinedButton(
+                                        onClick = {
+                                            feedUrl = "https://api.gamedata365.com/v1/crash/live"
+                                            mode = FeedMode.JSON_API
+                                            refreshSeconds = "5"
+                                            status = "GameData365 Aviator API selected · add your API key"
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Text("USE GAME DATA365 · AVIATOR FEED", fontWeight = FontWeight.Bold)
+                                    }
+                                    Text(
+                                        "Aviator (SPRIBE) aggregated feed · JSON fallback polling · API key required. Provider documents results after each round, not a live in-round prediction stream.",
+                                        color = Color(0xFF8993A6), fontSize = 10.sp
                                     )
                                     OutlinedTextField(
                                         value = feedUrl,
@@ -310,7 +326,7 @@ class MainActivity : ComponentActivity() {
                             item {
                                 Card(colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(16.dp)) {
                                     Text(
-                                        "No structured odds fields received yet. Connect a JSON, SSE or WebSocket endpoint that supplies decimal price fields.",
+                                        "No Aviator multiplier fields received yet. Connect an authorised feed that supplies multiplier or coefficient fields.",
                                         modifier = Modifier.padding(16.dp),
                                         color = Color(0xFFAAB1C1), fontSize = 12.sp
                                     )
@@ -326,7 +342,7 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                             Text(hit.field, color = Color(0xFFB5BED0), fontSize = 11.sp, maxLines = 2)
-                                            Text("DECIMAL PRICE", color = Color(0xFF778195), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                            Text("CRASH MULTIPLIER", color = Color(0xFF778195), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                                         }
                                         Text(String.format(Locale.US, "%.3f", hit.decimal), color = accent, fontSize = 20.sp, fontWeight = FontWeight.Black)
                                     }
