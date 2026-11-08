@@ -1,3 +1,1 @@
-# CoefficientReader
-predictor
-cool site
+# Valid tool to relly on
