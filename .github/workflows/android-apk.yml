@@ -24,13 +24,16 @@ jobs:
           gradle-version: "8.9"
 
       - name: Prepare persistent signing key (when repository secrets are configured)
-        if: ${{ secrets.CR_KEYSTORE_BASE64 != '' }}
         env:
           CR_KEYSTORE_BASE64: ${{ secrets.CR_KEYSTORE_BASE64 }}
           CR_KEYSTORE_PASSWORD: ${{ secrets.CR_KEYSTORE_PASSWORD }}
           CR_KEY_ALIAS: ${{ secrets.CR_KEY_ALIAS }}
           CR_KEY_PASSWORD: ${{ secrets.CR_KEY_PASSWORD }}
         run: |
+          if [ -z "$CR_KEYSTORE_BASE64" ]; then
+            echo "No persistent signing key configured; using the temporary debug signer."
+            exit 0
+          fi
           KEYSTORE_PATH="$RUNNER_TEMP/coefficientreader-release.jks"
           printf '%s' "$CR_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
           {
