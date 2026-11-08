@@ -1,15 +1,12 @@
 package com.coefficientreader.app
 
-import android.annotation.SuppressLint
 import android.os.Bundle
-import android.webkit.JavascriptInterface
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -20,196 +17,340 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import java.net.URI
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-    private var pageTextCallback: ((String) -> Unit)? = null
-
-    inner class PageBridge {
-        @JavascriptInterface
-        fun sendVisibleText(value: String) {
-            runOnUiThread { pageTextCallback?.invoke(value.take(20000)) }
-        }
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val bg = Color(0xFF101018)
-            val panel = Color(0xFF1C1C28)
-            val red = Color(0xFFFF3038)
-            MaterialTheme(colorScheme = darkColorScheme(
-                primary = red,
-                background = bg,
-                surface = panel,
-                onBackground = Color.White,
-                onSurface = Color.White
-            )) {
-                var urlInput by remember { mutableStateOf("") }
-                var activeUrl by remember { mutableStateOf("") }
-                var screen by remember { mutableStateOf("setup") }
-                var status by remember { mutableStateOf("Enter the bookmaker website address to begin.") }
-                var latestCoefficient by remember { mutableStateOf("--") }
-                var lastUpdated by remember { mutableStateOf("Waiting for website data") }
-                var webView by remember { mutableStateOf<WebView?>(null) }
-                var scanActive by remember { mutableStateOf(false) }
-
-                pageTextCallback = { visibleText ->
-                    val oddsPattern = Regex("""(?<![\d.])(?:[1-9]\\d{0,3})\\.\\d{1,4}(?![\\d.])""")
-                    val values = oddsPattern.findAll(visibleText)
-                        .mapNotNull { it.value.toDoubleOrNull() }
-                        .filter { it > 1.0 && it <= 10000.0 }
-                        .toList()
-                    if (values.isNotEmpty()) {
-                        latestCoefficient = String.format(Locale.US, "%.2f", values.first())
-                        lastUpdated = "Page data received · live scan"
-                    }
-                }
+            val background = Color(0xFF0B0D13)
+            val surface = Color(0xFF171B25)
+            val raised = Color(0xFF202634)
+            val accent = Color(0xFFFF3545)
+            val mint = Color(0xFF42D6A4)
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    primary = accent,
+                    secondary = mint,
+                    background = background,
+                    surface = surface,
+                    onBackground = Color(0xFFF4F5FA),
+                    onSurface = Color(0xFFF4F5FA)
+                )
+            ) {
+                val engine = remember { FeedEngine() }
+                val scope = rememberCoroutineScope()
+                var feedUrl by remember { mutableStateOf("") }
+                var apiToken by remember { mutableStateOf("") }
+                var mode by remember { mutableStateOf(FeedMode.JSON_API) }
+                var refreshSeconds by remember { mutableStateOf("3") }
+                var status by remember { mutableStateOf("Ready · connect an authorised data feed") }
+                var connected by remember { mutableStateOf(false) }
+                var hits by remember { mutableStateOf<List<CoefficientHit>>(emptyList()) }
+                var feedJob by remember { mutableStateOf<Job?>(null) }
+                var updateCount by remember { mutableIntStateOf(0) }
 
                 DisposableEffect(Unit) {
-                    onDispose { pageTextCallback = null; webView?.destroy() }
+                    onDispose { feedJob?.cancel() }
                 }
 
-                LaunchedEffect(scanActive, webView) {
-                    while (scanActive) {
-                        webView?.evaluateJavascript(
-                            "(function(){return document.body ? document.body.innerText : '';})()"
-                        ) { encoded ->
-                            val decoded = runCatching {
-                                org.json.JSONTokener(encoded ?: "\"\"").nextValue() as? String
-                            }.getOrNull()
-                            if (!decoded.isNullOrBlank()) pageTextCallback?.invoke(decoded)
-                        }
-                        delay(3000)
-                    }
-                }
-
-                Scaffold(containerColor = bg) { padding ->
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                Scaffold(containerColor = background) { padding ->
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize().padding(padding),
+                        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 30.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                            Column {
-                                Text("COEFFICIENT", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp)
-                                Text("READER", color = red, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
-                            }
-                            Surface(color = Color(0xFF203A2C), shape = RoundedCornerShape(50)) {
-                                Text(if (scanActive) "● LIVE" else "● OFFLINE", color = if (scanActive) Color(0xFF62E69A) else Color.LightGray, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        if (screen == "setup") {
-                            Text("Connect your website", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                            Text("Enter the bookmaker URL. Sign in on the bookmaker's own page inside the app; CoefficientReader does not collect or store your password.", color = Color.LightGray)
-                            OutlinedTextField(
-                                value = urlInput,
-                                onValueChange = { urlInput = it },
+                        item {
+                            Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Website URL") },
-                                placeholder = { Text("https://example.com") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = red,
-                                    focusedLabelColor = red,
-                                    cursorColor = red
-                                )
-                            )
-                            Button(
-                                onClick = {
-                                    val raw = urlInput.trim()
-                                    val full = if (raw.startsWith("https://") || raw.startsWith("http://")) raw else "https://$raw"
-                                    val valid = runCatching {
-                                        URI(full).let { (it.scheme == "https" || it.scheme == "http") && !it.host.isNullOrBlank() }
-                                    }.getOrDefault(false)
-                                    if (valid) {
-                                        activeUrl = full
-                                        status = "Opening bookmaker website…"
-                                        screen = "browser"
-                                        webView?.loadUrl(full)
-                                    } else status = "Please enter a valid website URL."
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(containerColor = red)
-                            ) { Text("OPEN WEBSITE", fontWeight = FontWeight.Bold) }
-                            Text(status, color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                            Spacer(Modifier.weight(1f))
-                            Text("Your phone number and password are entered only on the bookmaker's own login page.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-                        } else {
-                            if (screen == "browser") {
-                                Text("Sign in to your bookmaker", color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                                Text("Complete sign-in on the website below. Then return here and start the reader.", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                                Button(onClick = { screen = "reader"; scanActive = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = red)) {
-                                    Text("I'M SIGNED IN — START READER", fontWeight = FontWeight.Bold)
-                                }
-                            } else {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                    Text("LIVE COEFFICIENT", color = Color.LightGray, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                                    TextButton(onClick = { scanActive = !scanActive }) { Text(if (scanActive) "Pause" else "Resume", color = red) }
-                                }
-                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     Box(
-                                        modifier = Modifier.size(230.dp).background(Color(0xFF35191D), CircleShape).padding(7.dp).background(red, CircleShape).padding(5.dp).background(bg, CircleShape),
+                                        modifier = Modifier.size(44.dp).background(accent, RoundedCornerShape(14.dp)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            Text(latestCoefficient, color = red, fontSize = 48.sp, fontWeight = FontWeight.Black)
-                                            Text("COEFFICIENT", color = Color.White, fontSize = 11.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-                                        }
+                                        Text("CR", color = Color.White, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                                    }
+                                    Column {
+                                        Text("COEFFICIENT", color = Color.White, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 1.1.sp)
+                                        Text("READER  •  ADVANCED", color = Color(0xFFAAB1C1), fontSize = 10.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
-                                Text(lastUpdated, color = Color(0xFF9B9BA8), style = MaterialTheme.typography.bodySmall)
-                                Text("Automatic page scan every 3 seconds. Live page changes are also observed.", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                                    OutlinedButton(onClick = { webView?.reload() }, modifier = Modifier.weight(1f)) { Text("Refresh site") }
-                                    OutlinedButton(onClick = { screen = "browser"; scanActive = false }, modifier = Modifier.weight(1f)) { Text("Back to site") }
+                                Surface(
+                                    color = if (connected) Color(0xFF173A32) else Color(0xFF30242A),
+                                    shape = RoundedCornerShape(50)
+                                ) {
+                                    Text(
+                                        if (connected) "● CONNECTED" else "● STANDBY",
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        color = if (connected) mint else Color(0xFFFF9AA2),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                             }
+                        }
 
-                            AndroidView(
-                                modifier = Modifier.fillMaxWidth().weight(1f).background(panel, RoundedCornerShape(14.dp)),
-                                factory = { context ->
-                                    WebView(context).apply {
-                                        settings.javaScriptEnabled = true
-                                        settings.domStorageEnabled = true
-                                        settings.loadsImagesAutomatically = true
-                                        webChromeClient = WebChromeClient()
-                                        addJavascriptInterface(PageBridge(), "CoefficientBridge")
-                                        webViewClient = object : WebViewClient() {
-                                            override fun onPageFinished(view: WebView, url: String) {
-                                                status = "Website loaded"
-                                                view.evaluateJavascript("""
-                                                    (function() {
-                                                      if (window.__coefficientReaderObserver) return;
-                                                      window.__coefficientReaderObserver = true;
-                                                      const send = function() {
-                                                        try {
-                                                          const text = document.body ? document.body.innerText : '';
-                                                          window.CoefficientBridge.sendVisibleText(text);
-                                                        } catch(e) {}
-                                                      };
-                                                      send();
-                                                      new MutationObserver(send).observe(document.documentElement, {subtree:true, childList:true, characterData:true});
-                                                    })();
-                                                """.trimIndent(), null)
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(26.dp),
+                                colors = CardDefaults.cardColors(containerColor = surface)
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(18.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Text("LIVE COEFFICIENT", color = Color(0xFFB8C0D0), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                                        Text("NATIVE FEED", color = mint, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Box(
+                                        modifier = Modifier.size(224.dp).background(Color(0xFF401E28), CircleShape).padding(7.dp)
+                                            .background(accent, CircleShape).padding(5.dp).background(Color(0xFF11141D), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Text(
+                                                hits.firstOrNull()?.decimal?.let { String.format(Locale.US, "%.2f", it) } ?: "--",
+                                                color = accent,
+                                                fontSize = 48.sp,
+                                                fontWeight = FontWeight.Black
+                                            )
+                                            Text("DECIMAL ODDS", color = Color.White, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+                                            Text(if (connected) "STREAM ACTIVE" else "WAITING FOR FEED", color = if (connected) mint else Color(0xFF9AA3B5), fontSize = 9.sp)
+                                        }
+                                    }
+                                    Text(status, color = Color(0xFFB8C0D0), fontSize = 12.sp)
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                        Metric("UPDATES", updateCount.toString(), mint)
+                                        Metric("DETECTED", hits.size.toString(), Color.White)
+                                        Metric("MODE", mode.label, accent)
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(22.dp),
+                                colors = CardDefaults.cardColors(containerColor = surface)
+                            ) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text("DATA SOURCE", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "Connect directly to an API or live feed. This engine does not scrape numbers from a website's visible screen.",
+                                        color = Color(0xFFAAB1C1), fontSize = 12.sp
+                                    )
+                                    OutlinedTextField(
+                                        value = feedUrl,
+                                        onValueChange = { feedUrl = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text("Feed endpoint URL") },
+                                        placeholder = {
+                                            Text(when (mode) {
+                                                FeedMode.JSON_API -> "https://api.example.com/odds"
+                                                FeedMode.SSE -> "https://api.example.com/odds/stream"
+                                                FeedMode.WEBSOCKET -> "wss://stream.example.com/odds"
+                                            })
+                                        },
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = accent,
+                                            focusedLabelColor = accent,
+                                            cursorColor = accent,
+                                            unfocusedBorderColor = Color(0xFF3A4354)
+                                        )
+                                    )
+                                    Text("CONNECTION TYPE", color = Color(0xFFAAB1C1), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        FeedMode.values().forEach { option ->
+                                            val selected = mode == option
+                                            Surface(
+                                                modifier = Modifier.weight(1f),
+                                                onClick = { mode = option },
+                                                color = if (selected) Color(0xFF51212D) else raised,
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Text(
+                                                    option.label,
+                                                    modifier = Modifier.padding(vertical = 12.dp, horizontal = 4.dp),
+                                                    color = if (selected) Color.White else Color(0xFFAAB1C1),
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                                )
                                             }
                                         }
-                                        webView = this
                                     }
-                                },
-                                update = { if (activeUrl.isNotBlank() && it.url == null && screen != "setup") it.loadUrl(activeUrl) }
+                                    OutlinedTextField(
+                                        value = apiToken,
+                                        onValueChange = { apiToken = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text("API token / key (optional)") },
+                                        singleLine = true,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = accent,
+                                            focusedLabelColor = accent,
+                                            cursorColor = accent,
+                                            unfocusedBorderColor = Color(0xFF3A4354)
+                                        )
+                                    )
+                                    if (mode == FeedMode.JSON_API) {
+                                        OutlinedTextField(
+                                            value = refreshSeconds,
+                                            onValueChange = { refreshSeconds = it.filter(Char::isDigit).take(2) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            label = { Text("Auto refresh interval (seconds)") },
+                                            singleLine = true,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = accent,
+                                                focusedLabelColor = accent,
+                                                cursorColor = accent,
+                                                unfocusedBorderColor = Color(0xFF3A4354)
+                                            )
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                                        Button(
+                                            onClick = {
+                                                val raw = feedUrl.trim()
+                                                val uri = runCatching { URI(raw) }.getOrNull()
+                                                val valid = when (mode) {
+                                                    FeedMode.JSON_API, FeedMode.SSE -> uri?.scheme == "https" && !uri.host.isNullOrBlank()
+                                                    FeedMode.WEBSOCKET -> uri?.scheme == "wss" && !uri.host.isNullOrBlank()
+                                                }
+                                                if (!valid) {
+                                                    status = when (mode) {
+                                                        FeedMode.JSON_API, FeedMode.SSE -> "Use a valid HTTPS feed endpoint."
+                                                        FeedMode.WEBSOCKET -> "Use a secure WSS endpoint."
+                                                    }
+                                                } else {
+                                                    feedJob?.cancel()
+                                                    hits = emptyList()
+                                                    updateCount = 0
+                                                    connected = true
+                                                    status = "Connecting to authorised feed…"
+                                                    val config = FeedConfig(
+                                                        url = raw,
+                                                        mode = mode,
+                                                        token = apiToken.trim(),
+                                                        refreshSeconds = refreshSeconds.toIntOrNull()?.coerceIn(2, 60) ?: 3
+                                                    )
+                                                    feedJob = scope.launch {
+                                                        engine.connect(config).collect { event ->
+                                                            when (event) {
+                                                                is FeedEvent.Status -> {
+                                                                    status = event.message
+                                                                    connected = !event.message.contains("failed", true) &&
+                                                                        !event.message.contains("HTTP 4", true) &&
+                                                                        !event.message.contains("HTTP 5", true)
+                                                                }
+                                                                is FeedEvent.Data -> {
+                                                                    if (event.hits.isNotEmpty()) {
+                                                                        hits = event.hits
+                                                                        updateCount += 1
+                                                                        status = "New structured price data received"
+                                                                        connected = true
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(containerColor = accent),
+                                            shape = RoundedCornerShape(14.dp)
+                                        ) {
+                                            Text("CONNECT FEED", fontWeight = FontWeight.Bold)
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                feedJob?.cancel()
+                                                feedJob = null
+                                                connected = false
+                                                status = "Feed stopped"
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(14.dp)
+                                        ) {
+                                            Text("STOP")
+                                        }
+                                    }
+                                    Text(
+                                        "API keys stay in memory for this session and are not saved by the app. Use only endpoints and credentials you are authorised to access.",
+                                        color = Color(0xFF8993A6), fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        item {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("DETECTED PRICE FIELDS", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("${hits.size} found", color = Color(0xFF9CA7BA), fontSize = 11.sp)
+                            }
+                        }
+                        if (hits.isEmpty()) {
+                            item {
+                                Card(colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(16.dp)) {
+                                    Text(
+                                        "No structured odds fields received yet. Connect a JSON, SSE or WebSocket endpoint that supplies decimal price fields.",
+                                        modifier = Modifier.padding(16.dp),
+                                        color = Color(0xFFAAB1C1), fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        } else {
+                            items(hits) { hit ->
+                                Card(colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(15.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Text(hit.field, color = Color(0xFFB5BED0), fontSize = 11.sp, maxLines = 2)
+                                            Text("DECIMAL PRICE", color = Color(0xFF778195), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        Text(String.format(Locale.US, "%.3f", hit.decimal), color = accent, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Text(
+                                "Reader support: native HTTPS JSON polling, SSE and WSS streams. Site-specific authentication, undocumented endpoints, proprietary encodings and protected feeds require an authorised adapter; a homepage URL alone is not a data feed.",
+                                color = Color(0xFF778195), fontSize = 10.sp
                             )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun Metric(label: String, value: String, tint: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(label, color = Color(0xFF8993A6), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        Text(value, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
